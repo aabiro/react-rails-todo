@@ -10,9 +10,26 @@ import ActionCable from "actioncable"; // Use the official JS library
 
 // --- Configuration ---
 // Use environment variables for URLs
-const WS_URL = process.env.REACT_APP_WS_URL || "ws://localhost:3001/cable"; // WebSocket URL
+
+// --- FIX: Use wss:// for secure WebSocket connection ---
+// Construct WebSocket URL based on the API base URL's protocol
+const determineWsUrl = (apiUrl) => {
+  if (!apiUrl) return "ws://localhost:3000/cable"; // Default for local if API URL not set
+
+  const url = new URL(apiUrl); // Use URL constructor for easier parsing
+  const protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${url.host}/cable`; // Construct WSS or WS URL with the host
+};
+
+// Determine API base URL first
 const API_BASE_URL =
-  process.env.REACT_APP_API_URL || "http://localhost:3001/api/v1"; // HTTP API URL
+  process.env.REACT_APP_API_URL || "http://localhost:3000/api/v1"; // HTTP API URL
+
+// Determine WebSocket URL based on API_BASE_URL
+const WS_URL =
+  process.env.REACT_APP_WS_URL ||
+  determineWsUrl(API_BASE_URL.replace("/api/v1", "")); // Pass base URL without path
+// --- End Fix ---
 
 // --- Action Cable Context ---
 // Provides the Action Cable consumer instance to the app
@@ -95,9 +112,24 @@ function TodoList({ listId }) {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/todo_lists/${listId}`);
+      // Construct the full URL for the specific list
+      const listApiUrl = `${API_BASE_URL}/todo_lists/${listId}`;
+      // console.log("Fetching from:", listApiUrl); // Debug log
+      const response = await fetch(listApiUrl);
       if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+        // Try to read the response body for more error details
+        let errorText = `HTTP error! Status: ${response.status}`;
+        try {
+          const body = await response.text();
+          console.error("API Error Response Body:", body);
+          // If it's HTML, don't include it directly in the user-facing error
+          if (!body.trim().startsWith("<!DOCTYPE")) {
+            errorText += ` - ${body}`;
+          }
+        } catch (e) {
+          /* Ignore if body cannot be read */
+        }
+        throw new Error(errorText);
       }
       const data = await response.json();
       setListName(data.name || `List ${listId}`); // Set list name
@@ -109,7 +141,7 @@ function TodoList({ listId }) {
     } finally {
       setIsLoading(false);
     }
-  }, [listId]);
+  }, [listId]); // Dependency list only includes listId
 
   // --- Action Cable Subscription Effect ---
   useEffect(() => {
@@ -145,7 +177,13 @@ function TodoList({ listId }) {
             setItems((currentItems) => {
               // Sort function to keep completed items at the bottom
               const sortItems = (a, b) => {
-                if (a.completed === b.completed) return 0; // Keep original order if same status
+                if (a.completed === b.completed) {
+                  // If completion status is the same, sort by creation time (newest first) or ID
+                  // Assuming created_at exists and is comparable
+                  return (b.created_at || b.id) > (a.created_at || a.id)
+                    ? 1
+                    : -1;
+                }
                 return a.completed ? 1 : -1; // Completed items go last
               };
 
@@ -352,3 +390,14 @@ function TodoItem({ item, onToggle, onDelete }) {
 }
 
 export default App;
+
+// --- To Run ---
+// 1. Make sure Rails backend is running (e.g., rails s -p 3000)
+// 2. Set up React project (npx create-react-app todo-frontend)
+// 3. Install Action Cable JS client: `npm install actioncable` or `yarn add actioncable`
+// 4. Install Tailwind CSS (follow official guide, install @tailwindcss/postcss if needed)
+// 5. Replace src/App.js with this code.
+// 6. Set environment variables if needed (e.g., in .env file):
+//    REACT_APP_WS_URL=wss://your-rails-api.onrender.com/cable
+//    REACT_APP_API_URL=https://your-rails-api.onrender.com/api/v1
+// 7. Start React app: `npm start` or `yarn start`
